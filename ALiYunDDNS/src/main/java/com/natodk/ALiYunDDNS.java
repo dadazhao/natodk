@@ -17,6 +17,7 @@ import javax.net.ssl.X509TrustManager;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.List;
@@ -43,6 +44,15 @@ public class ALiYunDDNS {
     private static final String ALI_DOMAIN_KEYWORD="ali-domain-keyword";
     private static final String ALI_DOMAIN_TYPE="ali-domain-type";
 
+    //获取本机公网IP地址
+    private static final String LOCAL_NETWORK_ENABLE="local-network-enable";
+    private static final String LINE_CONTAINS_STRING="line-contains-string";
+
+    private static final String CONFIG_FILE_CHARSET="config-file-charset";
+    private static final String COMMAND_LINE_CHARSET="command-line-charset";
+
+
+    private static final String IP_CHECK_COMMAND="ip-check-command";
 
     private static Properties props = new Properties();
 
@@ -139,6 +149,7 @@ public class ALiYunDDNS {
 
             }
         }
+        System.out.println(rexp);
         // 正则表达式，提取xxx.xxx.xxx.xxx，将IP地址从接口返回结果中提取出来
         Pattern pat = Pattern.compile(rexp);
         Matcher mat = pat.matcher(result);
@@ -148,6 +159,45 @@ public class ALiYunDDNS {
             break;
         }
         return res;
+    }
+
+    private String getCurrentLocalHostIP(){
+        try {
+            Process exec;
+            BufferedReader reader;
+            if (isLinux()){
+                exec = Runtime.getRuntime().exec(props.getProperty(IP_CHECK_COMMAND,"ifconfig"));
+                reader= new BufferedReader(new InputStreamReader(exec.getInputStream(), Charset.forName(props.getProperty(COMMAND_LINE_CHARSET,"UTF-8"))));
+            }else{
+                exec = Runtime.getRuntime().exec(props.getProperty(IP_CHECK_COMMAND,"ipconfig"));
+                reader= new BufferedReader(new InputStreamReader(exec.getInputStream(),  Charset.forName(props.getProperty(COMMAND_LINE_CHARSET,"GBK"))));
+            }
+            String str="";
+            System.out.println("行匹配字段["+props.getProperty(LINE_CONTAINS_STRING));
+            while ((str = reader.readLine())!=null){
+                if (str.contains(props.getProperty(LINE_CONTAINS_STRING))){
+                    System.out.println("匹配到的行["+str);
+                    Pattern compile;
+                    if (IPV6.equals(props.getProperty(IP_TYPE))){
+                        compile = Pattern.compile(props.getProperty(TEST_IPV6_REXP));
+                    }else{
+                        compile = Pattern.compile(props.getProperty(TEST_IPV4_REXP));
+                    }
+                    Matcher matcher = compile.matcher(str);
+                    while (matcher.find()){
+                        return matcher.group();
+                    }
+                }
+            }
+            reader.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return "";
+    }
+
+    public static boolean isLinux(){
+        return System.getProperty("os.name").toLowerCase().contains("linux");
     }
 
     /**
@@ -207,10 +257,15 @@ public class ALiYunDDNS {
             String recordId = record.getRecordId();
             // 记录值
             String recordsValue = record.getValue();
-            // 当前主机公网IP
-            String currentHostIP = ddns.getCurrentHostIP();
+            String currentHostIP = "";
+            if ("true".equalsIgnoreCase(props.getProperty(LOCAL_NETWORK_ENABLE))){
+                currentHostIP = ddns.getCurrentLocalHostIP();
+            }else{
+                // 当前主机公网IP
+                currentHostIP = ddns.getCurrentHostIP();
+            }
             System.out.println("-------------------------------当前主机公网IP为："+currentHostIP+"-------------------------------");
-            if(!currentHostIP.equals(recordsValue)){
+            if(!currentHostIP.equals(recordsValue)&&(!"".equals(currentHostIP))){
                 // 修改解析记录
                 UpdateDomainRecordRequest updateDomainRecordRequest = new UpdateDomainRecordRequest();
                 // 主机记录
@@ -236,7 +291,8 @@ public class ALiYunDDNS {
         InputStream is =null;
         try {
             is = Thread.currentThread().getContextClassLoader().getResourceAsStream(("application.properties"));
-            props.load(is);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(is,props.getProperty(CONFIG_FILE_CHARSET,"GBK")));
+            props.load(reader);
         } catch (IOException e) {
             return false;
         }finally {
